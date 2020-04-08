@@ -9,6 +9,7 @@ class ServerProtocol(asyncio.Protocol):
     login: str = None
     server: 'Server'
     transport: transports.Transport
+    max_message_history = 10
 
     def __init__(self, server: 'Server'):
         self.server = server
@@ -22,34 +23,61 @@ class ServerProtocol(asyncio.Protocol):
             self.send_message(decoded)
         else:
             if decoded.startswith("login:"):
-                self.login = decoded.replace("login:", "").replace("\r\n", "")
-                self.transport.write(
-                    f"Привет, {self.login}!\n".encode()
-                )
+                login = decoded.replace("login:", "").replace("\r\n", "")
+                if self.server.clients.get(login) is None:
+                    self.login = login
+                    self.send_message(f"Подключился к сессии")
+                    self.server.clients[login] = self
+                    self.transport.write(
+                        f"Привет, {self.login}!\n".encode()
+                    )
+                    self.write_history()
+
+                else:
+                    self.transport.write("В данной сессии уже существует данный логин. "
+                                         "Введите другой\n".encode())
             else:
                 self.transport.write("Неправильный логин\n".encode())
 
     def connection_made(self, transport: transports.Transport):
-        self.server.clients.append(self)
-        self.transport = transport
-        print("Пришел новый клиент")
+            self.transport = transport
+            self.transport.write("Для входа в чат введите"
+                                 " login:(Ваш логин)\n".encode())
+            print("Пришел новый клиент")
+
 
     def connection_lost(self, exception):
-        self.server.clients.remove(self)
-        print("Клиент вышел")
+        self.server.clients.pop(self.login)
+        self.send_message(f"вышел из чата")
+        print(f"Клиент {self.login} вышел")
 
     def send_message(self, content: str):
         message = f"{self.login}: {content}\n"
 
-        for user in self.server.clients:
+        self.save_message(message)
+        for login, user in self.server.clients.items():
             user.transport.write(message.encode())
+
+    def write_history(self):
+
+        self.transport.write(f"Последние {self.max_message_history} сообщений\n".encode())
+        for message in self.server.messages:
+            self.transport.write(f"{message}\n".encode())
+
+    def save_message(self, message: str):
+
+        if len(self.server.messages) > self.max_message_history:
+            self.server.messages.pop(0)
+        self.server.messages.append(message)
 
 
 class Server:
-    clients: list
+    clients: dict
+    messages: list
 
     def __init__(self):
-        self.clients = []
+        self.clients = {}
+        self.messages = []
 
     def build_protocol(self):
         return ServerProtocol(self)
